@@ -77,6 +77,7 @@ add_library(bitcoinkernel
   ../util/time.cpp
   ../util/tokenpipe.cpp
   ../sidechain/bundle.cpp
+  ../sidechain/hook.cpp
   ../sidechain/script.cpp
   ../sidechain/withdrawal.cpp
   ../validation.cpp

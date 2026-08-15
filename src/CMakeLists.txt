@@ -317,6 +317,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   sidechain/bmm.cpp
   sidechain/deposits.cpp
   sidechain/enforcer_client.cpp
+  sidechain/hook.cpp
   rpc/txoutproof.cpp
   script/sigcache.cpp
   signet.cpp
