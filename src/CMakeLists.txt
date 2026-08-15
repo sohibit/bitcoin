@@ -314,6 +314,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   rpc/server.cpp
   rpc/server_util.cpp
   rpc/signmessage.cpp
+  rpc/sidechain.cpp
   sidechain/bmm.cpp
   sidechain/cache.cpp
   sidechain/deposits.cpp
