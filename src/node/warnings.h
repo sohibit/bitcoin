@@ -23,6 +23,10 @@ namespace node {
 enum class Warning {
     CLOCK_OUT_OF_SYNC,
     PRE_RELEASE_TEST_BUILD,
+    // Kept above FATAL_INTERNAL_ERROR: the deprecated single-warning RPC path
+    // returns the last entry, so a later one would mask a fatal error.
+    SIDECHAIN_PEG_DEFERRED,
+    SIDECHAIN_PEG_SHORT,
     FATAL_INTERNAL_ERROR,
 };
 

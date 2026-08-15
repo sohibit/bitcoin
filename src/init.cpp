@@ -47,6 +47,7 @@
 #include <node/blockstorage.h>
 #include <node/caches.h>
 #include <node/chainstate.h>
+#include <node/warnings.h>
 #include <node/chainstatemanager_args.h>
 #include <node/context.h>
 #include <node/interface_ui.h>
@@ -68,6 +69,9 @@
 #include <rpc/util.h>
 #include <scheduler.h>
 #include <script/sigcache.h>
+#include <sidechain/cache.h>
+#include <sidechain/hook.h>
+#include <sidechain/script.h>
 #include <sync.h>
 #include <torcontrol.h>
 #include <txdb.h>
@@ -308,6 +312,7 @@ void Shutdown(NodeContext& node)
     if (node.peerman && node.validation_signals) node.validation_signals->UnregisterValidationInterface(node.peerman.get());
     if (node.connman) node.connman->Stop();
 
+    sidechain::StopMainchainCache();
     StopTorControl();
 
     if (node.background_init_thread.joinable()) node.background_init_thread.join();
@@ -697,6 +702,12 @@ static void StartupNotify(const ArgsManager& args)
 }
 #endif
 
+//! Shared by the init-time raise and the poll callback, so the two cannot drift.
+static bilingual_str SidechainDeferredWarning()
+{
+    return _("Sidechain blocks cannot be connected: peg data is incomplete or a block is waiting on its BMM commitment.");
+}
+
 static bool AppInitServers(NodeContext& node)
 {
     const ArgsManager& args = *Assert(node.args);
@@ -897,6 +908,61 @@ bool AppInitBasicSetup(const ArgsManager& args, std::atomic<int>& exit_status)
 bool AppInitParameterInteraction(const ArgsManager& args)
 {
     const CChainParams& chainparams = Params();
+
+    // Every block reads its parent to derive the credited deposit range.
+    sidechain::SetSidechainScriptPolicy(chainparams.GetConsensus().IsSidechain());
+    if (chainparams.GetConsensus().IsSidechain() && args.GetIntArg("-prune", 0) != 0) {
+        return InitError(_("-prune is not supported on a sidechain: every block reads its "
+                           "parent to derive the credited deposit range."));
+    }
+
+    // GetBlockSubsidy is 0 on a sidechain while coinbases still create coins via
+    // deposits, so coinstatsindex's unclaimed-rewards arithmetic drifts negative
+    // with no assert and gettxoutsetinfo silently returns garbage.
+    if (chainparams.GetConsensus().IsSidechain() &&
+        args.GetBoolArg("-coinstatsindex", DEFAULT_COINSTATSINDEX)) {
+        return InitError(_("-coinstatsindex is not supported on a sidechain: deposits create "
+                           "coins outside the block subsidy, which its accounting assumes."));
+    }
+    // A block credits deposits and settles bundles through transactions the
+    // producer builds itself. AreInputsStandard is what keeps a competing spend
+    // of a withdrawal request out of the mempool; without it one such
+    // transaction is selected into every template and makes every block invalid.
+    if (chainparams.GetConsensus().IsSidechain() &&
+        args.GetBoolArg("-acceptnonstdtxn", false)) {
+        return InitError(_("-acceptnonstdtxn is not supported on a sidechain: it lets a "
+                           "transaction that spends a withdrawal request reach the mempool, "
+                           "and every block built from that mempool is invalid."));
+    }
+
+    // Every node that builds a block needs it, not only the one that opens a
+    // bundle: settling a failed bundle reads the requests it swept. This warns
+    // rather than stops, because a node that only validates blocks runs without
+    // it -- feature_sidechain_bmm.py proves that with a peer that has no index,
+    // and an InitError would take that configuration away.
+    if (chainparams.GetConsensus().IsSidechain() && !args.GetBoolArg("-txindex", DEFAULT_TXINDEX)) {
+        LogWarning("-txindex is off. This node cannot build a block once a withdrawal bundle "
+                   "fails, because settling one reads the requests it swept. A node that only "
+                   "validates blocks does not need it.\n");
+    }
+
+    // A block credits its whole deposit range or none of it, and the peg has a
+    // reserve of its own, so a block below both leaves the deposits nothing --
+    // and the producer then stops the first time one arrives. Refused here, so
+    // an operator reads the number before the chain does.
+    if (chainparams.GetConsensus().IsSidechain()) {
+        const size_t reserved{static_cast<size_t>(
+            args.GetIntArg("-blockreservedweight", DEFAULT_BLOCK_RESERVED_WEIGHT))};
+        const size_t max_weight{static_cast<size_t>(
+            args.GetIntArg("-blockmaxweight", DEFAULT_BLOCK_MAX_WEIGHT))};
+        if (sidechain::ComputeDepositBudget(max_weight, reserved) == 0) {
+            return InitError(strprintf(_("-blockmaxweight %u is too small for a sidechain: a block "
+                                         "holds back %u for the peg and %u for the coinbase, and "
+                                         "the deposits get what is left."),
+                                       max_weight, sidechain::PEG_RESERVE_WEIGHT, reserved));
+        }
+    }
+
     // ********************************************************* Step 2: parameter interactions
 
     // also see: InitParameterInteraction()
@@ -1324,6 +1390,12 @@ static ChainstateLoadResult InitAndLoadChainstate(
         }
     };
     auto [status, error] = catch_exceptions([&] { return LoadChainstate(chainman, cache_sizes, options); });
+    if (status == node::ChainstateLoadStatus::SUCCESS &&
+        chainman.GetParams().GetConsensus().IsSidechain() && chainman.SnapshotBlockhash()) {
+        return {node::ChainstateLoadStatus::FAILURE_FATAL,
+                _("This datadir holds an assumeutxo snapshot, which a sidechain cannot use: the "
+                  "block after the snapshot base cannot read its parent.")};
+    }
     if (status == node::ChainstateLoadStatus::SUCCESS) {
         uiInterface.InitMessage(_("Verifying blocks…"));
         if (chainman.m_blockman.m_have_pruned && options.check_blocks > MIN_BLOCKS_TO_KEEP) {
@@ -1859,6 +1931,115 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         });
     }
 #endif
+
+    // Started before the initload thread: reindex and -loadblock connect blocks
+    // from there, and a sidechain cannot validate a block without the peg data.
+    // Also before RPC serves, so no request sees a half-published cache.
+    if (chainparams.GetConsensus().IsSidechain()) {
+        sidechain::SetTxLookup([](const uint256& hash) -> CTransactionRef {
+            if (!g_txindex) return nullptr;
+            uint256 block_hash;
+            CTransactionRef tx;
+            if (!g_txindex->FindTx(hash, block_hash, tx)) return nullptr;
+            return tx;
+        });
+        // Raised now and cleared once the peg data is complete. Setting it only
+        // from the poll callback would leave a node with no reachable enforcer
+        // showing no warning at all -- the case most needing one.
+        if (node.warnings) {
+            node.warnings->Set(node::Warning::SIDECHAIN_PEG_DEFERRED,
+                               SidechainDeferredWarning());
+        }
+        sidechain::StartMainchainCache(args, *chainparams.GetConsensus().sidechain_slot,
+                                       [&chainman, &node] {
+                                           // Blocks deferred while the cache was behind are
+                                           // otherwise never retried.
+                                           BlockValidationState state;
+                                           const bool activated{chainman.ActiveChainstate().ActivateBestChain(state)};
+
+                                           // Keyed on whether activation actually
+                                           // succeeded, not on cache coverage: a
+                                           // fully covered cache whose tip is stuck
+                                           // on a missing BMM commitment is the
+                                           // stall most worth reporting. Only
+                                           // re-evaluated when the mainchain view
+                                           // moves, so it can lag by one mainchain
+                                           // block.
+                                           sidechain::MainchainCache* c{sidechain::GetMainchainCache()};
+                                           if (node.warnings) {
+                                               const bool covered{c != nullptr && c->IsSynced() && c->HeadersLow() == 0};
+                                               const bool peg_related{activated ||
+                                                                      sidechain::IsDeferrableSidechainReason(state.GetRejectReason())};
+                                               if ((activated && covered) || !peg_related) {
+                                                   node.warnings->Unset(node::Warning::SIDECHAIN_PEG_DEFERRED);
+                                               } else {
+                                                   node.warnings->Set(node::Warning::SIDECHAIN_PEG_DEFERRED,
+                                                                      SidechainDeferredWarning());
+                                               }
+                                           }
+                                           // The mainchain paid a bundle this
+                                           // chain never opened. Nothing can undo
+                                           // it, so an operator has to see it.
+                                           const bool peg_short{WITH_LOCK(cs_main, return !sidechain::GetOrphanedPayouts(
+                                               [&chainman](const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
+                                                   AssertLockHeld(cs_main);
+                                                   const CBlockIndex* at{chainman.m_blockman.LookupBlockIndex(hash)};
+                                                   return at != nullptr && chainman.ActiveChain().Contains(at);
+                                               }).empty())};
+                                           if (node.warnings) {
+                                               if (peg_short) {
+                                                   node.warnings->Set(node::Warning::SIDECHAIN_PEG_SHORT,
+                                                                      _("The mainchain paid a withdrawal bundle this "
+                                                                        "sidechain never opened. The peg holds less "
+                                                                        "than it owes. See getsidechaininfo."));
+                                               } else {
+                                                   node.warnings->Unset(node::Warning::SIDECHAIN_PEG_SHORT);
+                                               }
+                                           }
+                                           if (activated) return;
+                                           if (sidechain::IsDeferrableSidechainReason(state.GetRejectReason())) {
+                                               // Waiting on peg data; the next poll retries it.
+                                               LogDebug(BCLog::VALIDATION, "sidechain: ActivateBestChain deferred: %s\n",
+                                                        state.ToString());
+                                           } else {
+                                               LogPrintf("sidechain: ActivateBestChain failed: %s\n", state.ToString());
+                                           }
+                                       });
+    }
+
+    // Deferred blocks are retried as the cache catches up, so this wait is not
+    // required for correctness -- it just avoids starting into a long stretch of
+    // deferrals when the peg data is only seconds away.
+    if (chainparams.GetConsensus().IsSidechain()) {
+        sidechain::MainchainCache* cache{sidechain::GetMainchainCache()};
+
+        // Short grace for the first successful poll. There is nothing to wait
+        // for if the enforcer is unreachable, and blocking startup on an absent
+        // one would make the node look hung.
+        // Must exceed nConnectTimeout, or a blackholed host bails out while the
+        // first connect attempt is still in flight.
+        const auto REACHABLE_GRACE{std::chrono::seconds{2 * nConnectTimeout / 1000 + 1}};
+        // Must outlast the grace, or the unreachable-enforcer early-out is dead.
+        const auto COVERAGE_TIMEOUT{std::max(std::chrono::seconds{10}, REACHABLE_GRACE + std::chrono::seconds{2})};
+        const auto started{std::chrono::steady_clock::now()};
+        bool covered{false};
+        while (!ShutdownRequested(node) && std::chrono::steady_clock::now() - started < COVERAGE_TIMEOUT) {
+            if (cache == nullptr) break;
+            if (cache->HeadersLow() == 0) {
+                covered = true;
+                break;
+            }
+            if (!cache->IsReachable() && std::chrono::steady_clock::now() - started > REACHABLE_GRACE) {
+                break;
+            }
+            uiInterface.InitMessage(_("Waiting for sidechain peg data…"));
+            UninterruptibleSleep(std::chrono::milliseconds{200});
+        }
+        if (!covered) {
+            LogPrintf("sidechain: peg data does not reach genesis; historical blocks "
+                      "will stay deferred until the enforcer catches up\n");
+        }
+    }
 
     std::vector<fs::path> vImportFiles;
     for (const std::string& strFile : args.GetArgs("-loadblock")) {
