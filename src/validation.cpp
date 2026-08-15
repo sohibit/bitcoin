@@ -2713,16 +2713,20 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_connect),
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
+    // Script checks are only queued above when parallel_script_checks is on, so a
+    // script-invalid block still looks valid here. Settle that before the peg hook,
+    // which reports unavailable peg data as a deferrable error rather than a rejection.
+    auto parallel_result = control.Complete();
+    if (parallel_result.has_value() && state.IsValid()) {
+        state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, strprintf("mandatory-script-verify-flag-failed (%s)", ScriptErrorString(parallel_result->first)), parallel_result->second);
+    }
+
     CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, params.GetConsensus());
     if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
                       strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
     }
 
-    auto parallel_result = control.Complete();
-    if (parallel_result.has_value() && state.IsValid()) {
-        state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, strprintf("mandatory-script-verify-flag-failed (%s)", ScriptErrorString(parallel_result->first)), parallel_result->second);
-    }
     if (!state.IsValid()) {
         LogInfo("Block validation error: %s", state.ToString());
         return false;
