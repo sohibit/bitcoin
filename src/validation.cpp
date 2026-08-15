@@ -5239,7 +5239,12 @@ void ChainstateManager::LoadExternalBlockFile(
                 if (hash == params.GetConsensus().hashGenesisBlock && WITH_LOCK(::cs_main, return ActiveHeight()) == -1) {
                     BlockValidationState state;
                     if (!ActiveChainstate().ActivateBestChain(state, nullptr)) {
-                        break;
+                        // A sidechain defers blocks awaiting peg data; breaking
+                        // here would silently abandon the rest of the file.
+                        if (!params.GetConsensus().IsSidechain() ||
+                            !sidechain::IsDeferrableSidechainReason(state.GetRejectReason())) {
+                            break;
+                        }
                     }
                 }
 

@@ -4,6 +4,8 @@
 
 #include <node/blockstorage.h>
 
+#include <sidechain/hook.h>
+
 #include <arith_uint256.h>
 #include <chain.h>
 #include <consensus/params.h>
@@ -1258,6 +1260,16 @@ void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_
     for (Chainstate* chainstate : WITH_LOCK(::cs_main, return chainman.GetAll())) {
         BlockValidationState state;
         if (!chainstate->ActivateBestChain(state, nullptr)) {
+            // A sidechain defers blocks whose peg data is not cached yet, and the
+            // cache retries as it catches up; treating that as fatal would make a
+            // node unstartable whenever the enforcer is behind.
+            //
+            if (chainman.GetParams().GetConsensus().IsSidechain() &&
+                sidechain::IsDeferrableSidechainReason(state.GetRejectReason())) {
+                LogPrintf("Deferred connecting best block (%s); will retry as peg data arrives\n",
+                          state.ToString());
+                continue;
+            }
             chainman.GetNotifications().fatalError(strprintf(_("Failed to connect best block (%s)."), state.ToString()));
             return;
         }
