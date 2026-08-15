@@ -1,0 +1,226 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  ARTIFACT_PREFIX: L2-S119-Inquisition
+
+jobs:
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.triple }}
+    needs: resolve
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            timeout: 180
+            exe-ext: ""
+            build-subdir: ""
+          - triple: x86_64-apple-darwin
+            os: macos-15-intel
+            timeout: 180
+            exe-ext: ""
+            build-subdir: ""
+          - triple: arm64-apple-darwin
+            os: macos-15
+            timeout: 180
+            exe-ext: ""
+            build-subdir: ""
+          - triple: x86_64-w64-msvc
+            os: windows-2022
+            timeout: 360
+            exe-ext: ".exe"
+            build-subdir: "Release/"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libboost-dev \
+              libevent-dev qtbase5-dev qttools5-dev qttools5-dev-tools qtwayland5
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install boost grep qrencode qt@5
+
+      - name: Configure Developer Command Prompt for Microsoft Visual C++
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Get Windows tool information
+        if: runner.os == 'Windows'
+        run: |
+          cmake -version | Tee-Object -FilePath "cmake_version"
+          msbuild -version | Tee-Object -FilePath "msbuild_version"
+          $env:VCToolsVersion | Tee-Object -FilePath "toolset_version"
+
+      - name: Configure vcpkg for Windows
+        if: runner.os == 'Windows'
+        run: |
+          Set-Location "$env:VCPKG_INSTALLATION_ROOT"
+          Add-Content -Path "triplets\x64-windows.cmake" -Value "set(VCPKG_BUILD_TYPE release)"
+          Add-Content -Path "triplets\x64-windows-static.cmake" -Value "set(VCPKG_BUILD_TYPE release)"
+
+      - name: Restore depends cache
+        if: runner.os != 'Windows'
+        uses: actions/cache/restore@v4
+        with:
+          path: ./depends
+          key: ${{ matrix.triple }}-${{ hashFiles('depends/packages/**') }}
+
+      - name: Restore vcpkg tools cache
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/downloads/tools
+          key: ${{ github.job }}-vcpkg-tools
+
+      - name: Restore vcpkg binary cache
+        if: runner.os == 'Windows'
+        id: vcpkg-binary-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: ${{ github.job }}-vcpkg-binary-${{ hashFiles('cmake_version', 'msbuild_version', 'toolset_version', 'vcpkg.json') }}
+
+      - name: Download dependencies
+        if: runner.os != 'Windows'
+        run: make -C ./depends ${{ runner.os == 'Linux' && 'download-linux' || 'download-osx' }}
+
+      - name: Build dependencies
+        if: runner.os != 'Windows'
+        run: make -C ./depends -j4
+
+      - name: Save depends cache
+        if: runner.os != 'Windows'
+        uses: actions/cache/save@v4
+        with:
+          path: ./depends
+          key: ${{ matrix.triple }}-${{ hashFiles('depends/packages/**') }}
+
+      - name: Configure build
+        if: runner.os != 'Windows'
+        run: |
+          # depends builds for the native triple, which carries the OS version
+          # on macOS (aarch64-apple-darwin24.6.0). Ask it which one it used, so
+          # the toolchain path cannot drift from what it wrote.
+          host=$(make -C ./depends --no-print-directory print-HOST | sed -n 's/^HOST=//p')
+          echo "depends host: $host"
+          test -f "depends/$host/toolchain.cmake"
+          cmake -B build -DBUILD_GUI=ON --toolchain "depends/$host/toolchain.cmake"
+
+      - name: Configure build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake -B build --preset vs2022-static `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DBUILD_GUI=ON -DWITH_BDB=OFF -DWITH_ZMQ=ON `
+            -DBUILD_BENCH=OFF -DBUILD_FUZZ_BINARY=OFF -DBUILD_TESTS=OFF -DBUILD_UTIL=ON
+
+      - name: Save vcpkg binary cache
+        if: runner.os == 'Windows' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: ${{ github.job }}-vcpkg-binary-${{ hashFiles('cmake_version', 'msbuild_version', 'toolset_version', 'vcpkg.json') }}
+
+      - name: Build
+        if: runner.os != 'Windows'
+        run: cmake --build build -j4
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --config Release
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="${ARTIFACT_PREFIX}-${{ needs.resolve.outputs.tag }}-${{ matrix.triple }}"
+          dir="stage"
+          mkdir -p "$dir"
+          for bin in bitcoind bitcoin-cli bitcoin-util bitcoin-qt; do
+            src="build/bin/${{ matrix.build-subdir }}${bin}${{ matrix.exe-ext }}"
+            test -f "$src" || { echo "::error::missing $src"; exit 1; }
+            cp "$src" "$dir/"
+          done
+          # The drivechain launcher looks for a binary named after the
+          # sidechain, at the root of the archive.
+          cp "$dir/bitcoind${{ matrix.exe-ext }}" "$dir/inquisition${{ matrix.exe-ext }}"
+          ( cd "$dir" && 7z a -tzip "../${name}.zip" . )
+          echo "ZIP_NAME=${name}.zip" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
+          path: ${{ env.ZIP_NAME }}
+
+  release:
+    name: Publish GitHub release
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job holds artifacts, not a checkout, so gh cannot read the
+          # repository from git.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.resolve.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/*.zip dist/SHA256SUMS \
+              --title "$TAG" --generate-notes
+          fi
