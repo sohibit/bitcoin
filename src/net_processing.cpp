@@ -5040,6 +5040,10 @@ TemplateStats PeerManagerImpl::GetTemplateStats() const
 void PeerManagerImpl::MaybeGenerateNewTemplate()
 {
     if (m_opts.share_template_count == 0) return;
+    // A sidechain block comes from its producer through connect_block, so a
+    // shared template has no reader. Building one also makes the peg settle
+    // every ruled bundle, which a node without -txindex cannot do.
+    if (m_chainman.GetConsensus().IsSidechain()) return;
     if (m_next_template_update == NodeClock::time_point::min()) {
         if (m_chainman.IsInitialBlockDownload() || !m_mempool.GetLoadTried()) {
              return;

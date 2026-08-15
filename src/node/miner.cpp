@@ -17,6 +17,9 @@
 #include <deploymentstatus.h>
 #include <logging.h>
 #include <policy/feerate.h>
+#include <sidechain/bmm.h>
+#include <sidechain/validation.h>
+#include <sidechain/withdrawal.h>
 #include <policy/policy.h>
 #include <pow.h>
 #include <primitives/transaction.h>
@@ -123,7 +126,11 @@ void BlockAssembler::resetBlock()
     nFees = 0;
 }
 
+// The peg reads what the operator staged, so this must not run while that lock
+// is held. Declared on the definition, so the requirement stops at this file
+// instead of reaching every caller of the assembler.
 std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
+    EXCLUSIVE_LOCKS_REQUIRED(!sidechain::g_staged_mutex)
 {
     const auto time_start{SteadyClock::now()};
 
@@ -152,6 +159,61 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     pblock->nTime = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
     m_lock_time_cutoff = pindexPrev->GetMedianTimePast();
 
+    // The peg comes first, because consensus makes it mandatory. A settlement
+    // the mainchain has ruled on must be in this block, so its weight is not
+    // the mempool's to spend. Add it afterwards and a full mempool builds a
+    // block over MAX_BLOCK_WEIGHT, which the node then rejects -- and since the
+    // settlement is still owed, no later block can be built either.
+    sidechain::CoinbasePeg sidechain_peg;
+    std::vector<CTransactionRef> sidechain_peg_txs;
+    std::vector<sidechain::LiveBundleRef> sidechain_live;
+    if (chainparams.GetConsensus().IsSidechain()) {
+        const auto read_block{[this](CBlock& out, const CBlockIndex& at) {
+            return m_chainstate.m_blockman.ReadBlock(out, at);
+        }};
+        std::string error;
+        // The peg comes out of a reserve every block holds back, so it never
+        // competes with the deposits for a byte, and one pass builds it.
+        uint256 main_tip;
+        std::optional<uint256> parent_anchor;
+        const size_t deposit_budget{
+            sidechain::ComputeDepositBudget(m_options.nBlockMaxWeight, nBlockWeight)};
+        if (!sidechain::ReadPegAnchors(pindexPrev, read_block, main_tip, parent_anchor, error) ||
+            !sidechain::BuildCoinbasePegOutputs(pindexPrev, read_block, main_tip, deposit_budget,
+                                                sidechain_peg, error) ||
+            !sidechain::BuildPegTransactions(m_chainstate.m_chainman, *pindexPrev,
+                                             sidechain_peg.prev_main, parent_anchor,
+                                             sidechain::TakeStageSnapshot(), sidechain_peg_txs,
+                                             sidechain_live, error)) {
+            throw std::runtime_error(strprintf("%s: sidechain peg: %s", __func__, error));
+        }
+
+        // Hold back what the peg will take, so the mempool cannot spend it.
+        const auto reserve_output{[&](const CTxOut& out) {
+            nBlockWeight += WITNESS_SCALE_FACTOR * GetSerializeSize(out);
+            nBlockSigOpsCost += WITNESS_SCALE_FACTOR * out.scriptPubKey.GetSigOpCount(false);
+        }};
+        for (const CTransactionRef& tx : sidechain_peg_txs) {
+            nBlockWeight += GetTransactionWeight(*tx);
+            nBlockSigOpsCost += WITNESS_SCALE_FACTOR * GetLegacySigOpCount(*tx);
+        }
+        for (const CTxOut& out : sidechain_peg.deposits) reserve_output(out);
+        reserve_output(sidechain_peg.bmm_commitment);
+        if (!sidechain_live.empty()) {
+            reserve_output(sidechain::BuildLiveBundleOutput(sidechain_live));
+        }
+
+        // A peg that does not fit is a block nobody can build. Say so here,
+        // where the cause is known, rather than as bad-blk-weight from the
+        // node's own validation of a block it just made.
+        if (nBlockWeight > m_options.nBlockMaxWeight ||
+            nBlockSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
+            throw std::runtime_error(strprintf(
+                "%s: the sidechain peg does not fit in a block: %u weight, %d sigops",
+                __func__, nBlockWeight, nBlockSigOpsCost));
+        }
+    }
+
     int nPackagesSelected = 0;
     int nDescendantsUpdated = 0;
     if (m_mempool) {
@@ -171,6 +233,21 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
     coinbaseTx.vout[0].nValue = nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus());
+    if (chainparams.GetConsensus().IsSidechain()) {
+        // Deposits lead, the miner's fee output follows, commitment goes last.
+        sidechain_peg.deposits.push_back(coinbaseTx.vout[0]);
+        sidechain_peg.deposits.push_back(sidechain_peg.bmm_commitment);
+        coinbaseTx.vout = std::move(sidechain_peg.deposits);
+        // Absent already means nothing is in flight, so most blocks say nothing.
+        if (!sidechain_live.empty()) {
+            coinbaseTx.vout.push_back(sidechain::BuildLiveBundleOutput(sidechain_live));
+        }
+        pblock->vtx.insert(pblock->vtx.end(), sidechain_peg_txs.begin(), sidechain_peg_txs.end());
+        for (const CTransactionRef& tx : sidechain_peg_txs) {
+            pblocktemplate->vTxFees.push_back(0);
+            pblocktemplate->vTxSigOpsCost.push_back(GetLegacySigOpCount(*tx) * WITNESS_SCALE_FACTOR);
+        }
+    }
     coinbaseTx.vin[0].scriptSig = CScript() << nHeight << OP_0;
     Assert(nHeight > 0);
     coinbaseTx.nLockTime = static_cast<uint32_t>(nHeight - 1);
