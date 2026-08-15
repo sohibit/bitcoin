@@ -761,6 +761,17 @@ static RPCHelpMan getblocktemplate()
     if (strMode != "template")
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid mode");
 
+    // Rejected before longpoll and before assembling a block only to discard it.
+    // A sidechain coinbase is consensus-mandated -- exact deposit scripts and
+    // amounts, plus the BMM commitment -- and this RPC emits no coinbasetxn, so
+    // a caller cannot build a valid one. `proposal` mode above still works: it
+    // validates a block the caller already has rather than describing one.
+    if (chainman.GetParams().GetConsensus().IsSidechain()) {
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND,
+                           "getblocktemplate cannot describe a sidechain coinbase: it is "
+                           "consensus-mandated and no coinbasetxn is supplied");
+    }
+
     if (!miner.isTestChain()) {
         const CConnman& connman = EnsureConnman(node);
         if (connman.GetNodeCount(ConnectionDirection::Both) == 0) {
