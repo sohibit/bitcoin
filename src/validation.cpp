@@ -44,6 +44,7 @@
 #include <random.h>
 #include <script/script.h>
 #include <script/sigcache.h>
+#include <sidechain/hook.h>
 #include <sidechain/script.h>
 #include <signet.h>
 #include <tinyformat.h>
@@ -2721,7 +2722,26 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, strprintf("mandatory-script-verify-flag-failed (%s)", ScriptErrorString(parallel_result->first)), parallel_result->second);
     }
 
-    CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, params.GetConsensus());
+    CAmount sidechain_deposit_credit{0};
+    if (params.GetConsensus().IsSidechain() && state.IsValid()) {
+        const auto read_block{[this](CBlock& out, const CBlockIndex& at) {
+            return m_blockman.ReadBlock(out, at);
+        }};
+        const auto spent_outputs{[&blockundo](size_t tx_index, std::vector<CTxOut>& out) {
+            if (tx_index == 0 || tx_index > blockundo.vtxundo.size()) return false;
+            out.clear();
+            for (const Coin& coin : blockundo.vtxundo[tx_index - 1].vprevout) out.push_back(coin.out);
+            return true;
+        }};
+        // The failure travels in `state`, which the tail below already reports.
+        // Marked nodiscard at the declaration, so a later caller cannot drop it.
+        if (!sidechain::CheckBlockPegRules(block, *pindex, read_block, spent_outputs, fJustCheck,
+                                           sidechain_deposit_credit, state)) {
+            return false;
+        }
+    }
+
+    CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, params.GetConsensus()) + sidechain_deposit_credit;
     if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
                       strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
