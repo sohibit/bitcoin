@@ -94,6 +94,10 @@ BASE_SCRIPTS = [
     # Longest test should go first, to favor running tests in parallel
     # vv Tests less than 5m vv
     'feature_fee_estimation.py',
+    'feature_sidechain.py',
+    'feature_sidechain_bmm.py --descriptors',
+    'feature_sidechain_standardness.py',
+    'feature_sidechain_withdrawal.py',
     'feature_taproot.py',
     'feature_block.py',
     'mempool_ephemeral_dust.py',
