@@ -188,6 +188,13 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   script/sign.cpp
   script/signingprovider.cpp
   script/solver.cpp
+  # Solver() classifies the peg script shapes, so this has to sit beside it.
+  # Leaving it in bitcoin_node left bitcoin-util unlinkable.
+  sidechain/script.cpp
+  # IsStandardTx() reads the whole request output, not the script alone, so the
+  # parser has to sit beside policy.cpp for the same reason.
+  sidechain/bundle.cpp
+  sidechain/withdrawal.cpp
 )
 target_link_libraries(bitcoin_common
   PRIVATE
