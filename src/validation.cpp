@@ -44,6 +44,7 @@
 #include <random.h>
 #include <script/script.h>
 #include <script/sigcache.h>
+#include <sidechain/script.h>
 #include <signet.h>
 #include <tinyformat.h>
 #include <txdb.h>
@@ -2229,8 +2230,18 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
         // failures through additional data in, eg, the coins being
         // spent being checked as a part of CScriptCheck.
 
+        // A BIP300 treasury output is bare `OP_DRIVECHAIN <slot> OP_TRUE`. The
+        // NOP is exactly what the discouragement flag rejects, and the script
+        // leaves two stack elements so it also trips CLEANSTACK. Neither is a
+        // consensus rule, and AreInputsStandard requires an empty scriptSig on
+        // these inputs, so nothing is left to malleate.
+        script_verify_flags input_flags{flags};
+        if (sidechain::IsDrivechainTreasury(txdata.m_spent_outputs[i].scriptPubKey)) {
+            input_flags &= ~(SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS | SCRIPT_VERIFY_CLEANSTACK);
+        }
+
         // Verify signature
-        CScriptCheck check(txdata.m_spent_outputs[i], tx, validation_cache.m_signature_cache, i, flags, cacheSigStore, &txdata);
+        CScriptCheck check(txdata.m_spent_outputs[i], tx, validation_cache.m_signature_cache, i, input_flags, cacheSigStore, &txdata);
         if (pvChecks) {
             pvChecks->emplace_back(std::move(check));
         } else if (auto result = check(); result.has_value()) {
