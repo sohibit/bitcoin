@@ -1034,6 +1034,7 @@ static RPCHelpMan createwalletdescriptor()
 }
 
 // addresses
+RPCHelpMan withdraw();
 RPCHelpMan getaddressinfo();
 RPCHelpMan getnewaddress();
 RPCHelpMan getrawchangeaddress();
@@ -1133,6 +1134,7 @@ Span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &getunconfirmedbalance},
         {"wallet", &getbalances},
         {"wallet", &getwalletinfo},
+        {"sidechain", &withdraw},
         {"wallet", &importaddress},
         {"wallet", &importdescriptors},
         {"wallet", &importmulti},

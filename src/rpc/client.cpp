@@ -320,6 +320,13 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "stop", 0, "wait" },
     { "addnode", 2, "v2transport" },
     { "addconnection", 2, "v2transport" },
+    { "withdraw", 1, "amount_sats" },
+    { "withdraw", 2, "sidechain_fee_rate" },
+    { "withdraw", 3, "mainchain_fee_sats" },
+    { "create_bundle", 0, "max_requests" },
+    { "abort_withdrawal", 1, "vout" },
+    { "cancel_abort", 1, "vout" },
+    { "connect_block", 0, "block" },
 };
 // clang-format on
 

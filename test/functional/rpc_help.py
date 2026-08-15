@@ -103,7 +103,10 @@ class HelpRpcTest(BitcoinTestFramework):
         # command titles
         titles = [line[3:-3] for line in node.help().splitlines() if line.startswith('==')]
 
-        components = ['Blockchain', 'Control', 'Mining', 'Network', 'Rawtransactions', 'Util']
+        # Sidechain is this fork's own category: the peg RPCs are always
+        # compiled, and they answer only when -sidechainslot is set.
+        components = ['Blockchain', 'Control', 'Mining', 'Network', 'Rawtransactions', 'Sidechain',
+                      'Util']
 
         if self.is_wallet_compiled():
             components.append('Wallet')
