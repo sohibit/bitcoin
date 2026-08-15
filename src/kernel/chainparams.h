@@ -169,6 +169,7 @@ public:
         RenounceParameters renounce{};
         bool fastprune{false};
         bool enforce_bip94{false};
+        std::optional<uint8_t> sidechain_slot{};
     };
 
     struct MainNetOptions {

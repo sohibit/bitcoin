@@ -124,6 +124,13 @@ void ReadRegTestArgs(const ArgsManager& args, CChainParams::RegTestOptions& opti
 {
     if (auto value = args.GetBoolArg("-fastprune")) options.fastprune = *value;
     if (HasTestOption(args, "bip94")) options.enforce_bip94 = true;
+    if (args.IsArgSet("-sidechainslot")) {
+        const int64_t slot{args.GetIntArg("-sidechainslot", -1)};
+        if (slot < 0 || slot > 255) {
+            throw std::runtime_error("-sidechainslot must be between 0 and 255");
+        }
+        options.sidechain_slot = static_cast<uint8_t>(slot);
+    }
 
     HandleDeploymentArgs(args, options.dep_opts);
     HandleRenounceArgs(args, options.renounce);
@@ -138,6 +145,13 @@ const CChainParams &Params() {
 
 std::unique_ptr<const CChainParams> CreateChainParams(const ArgsManager& args, const ChainType chain)
 {
+    // Only regtest consumes -sidechainslot. Accepting it elsewhere would start a
+    // node with the peg silently unenforced, which is a consensus rule quietly
+    // switched off by a typo.
+    if (args.IsArgSet("-sidechainslot") && chain != ChainType::REGTEST) {
+        throw std::runtime_error("-sidechainslot is only supported on regtest");
+    }
+
     switch (chain) {
     case ChainType::MAIN: {
         auto opts = CChainParams::MainNetOptions{};

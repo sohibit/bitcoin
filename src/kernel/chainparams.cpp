@@ -603,6 +603,7 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY] = SetupDeployment{.start = 0, .timeout = Consensus::HereticalDeployment::NO_TIMEOUT, .activate = 0x30000000, .abandon = 0x50000000, .period = 144};
         INQ_DEPLOYMENTS_REGTEST
 
+        consensus.sidechain_slot = opts.sidechain_slot;
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
 

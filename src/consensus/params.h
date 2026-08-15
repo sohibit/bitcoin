@@ -13,6 +13,7 @@
 #include <array>
 #include <chrono>
 #include <limits>
+#include <optional>
 #include <map>
 #include <vector>
 
@@ -76,6 +77,10 @@ struct HereticalDeployment
  * Parameters that influence chain consensus.
  */
 struct Params {
+    /** Drivechain slot this chain withdraws to, when it is a sidechain. */
+    std::optional<uint8_t> sidechain_slot;
+    bool IsSidechain() const { return sidechain_slot.has_value(); }
+
     uint256 hashGenesisBlock;
     int nSubsidyHalvingInterval;
     /**
