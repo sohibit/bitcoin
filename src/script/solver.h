@@ -32,6 +32,8 @@ enum class TxoutType {
     WITNESS_V0_KEYHASH,
     WITNESS_V1_TAPROOT,
     TX_BARE_DEFAULT_CHECK_TEMPLATE_VERIFY_HASH,
+    DRIVECHAIN, //!< BIP300 sidechain treasury, anyone can spend
+    WITHDRAWAL_REQUEST, //!< sidechain peg-out request, anyone can spend
     WITNESS_UNKNOWN, //!< Only for Witness versions not already defined above
 };
 

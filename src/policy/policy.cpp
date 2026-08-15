@@ -17,6 +17,8 @@
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/solver.h>
+#include <sidechain/script.h>
+#include <sidechain/withdrawal.h>
 #include <serialize.h>
 #include <span.h>
 
@@ -84,6 +86,10 @@ bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
 
     if (whichType == TxoutType::NONSTANDARD) {
         return false;
+    } else if (whichType == TxoutType::WITHDRAWAL_REQUEST) {
+        // A peg output means nothing on a chain with no peg. Solver still names
+        // it, so a decoded transaction reads correctly everywhere.
+        return sidechain::SidechainScriptPolicy();
     } else if (whichType == TxoutType::MULTISIG) {
         unsigned char m = vSolutions.front()[0];
         unsigned char n = vSolutions.back()[0];
@@ -138,6 +144,16 @@ bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_dat
     TxoutType whichType;
     for (const CTxOut& txout : tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
+            reason = "scriptpubkey";
+            return false;
+        }
+
+        // The script alone cannot say whether a request is real: the mainchain
+        // fee has to be below the value, which only the output carries. One the
+        // parser rejects matches no peg rule at all, so the next block author
+        // takes the coins with an empty scriptSig.
+        if (whichType == TxoutType::WITHDRAWAL_REQUEST &&
+            !sidechain::IsWithdrawalRequestOutput(txout)) {
             reason = "scriptpubkey";
             return false;
         }
@@ -215,6 +231,17 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
             // pre-activation disallowing enforced via discouraged logic in the
             // interpreter.
             if (tx.vin[i].scriptSig.size() != 0) return false;
+        } else if (whichType == TxoutType::DRIVECHAIN) {
+            // The treasury is anyone-can-spend, so anything in the scriptSig is
+            // third-party malleability. The enforcer spends it bare.
+            if (tx.vin[i].scriptSig.size() != 0) return false;
+        } else if (whichType == TxoutType::WITHDRAWAL_REQUEST) {
+            // A pending withdrawal is anyone-can-spend so the block producer can
+            // sweep it into a bundle without the owner's signature. Refusing to
+            // relay any spend is what keeps that from being a free-for-all: every
+            // way to move one then costs a BMM bid, because it has to arrive in a
+            // block. Consensus, not policy, decides where the coins may go.
+            return false;
         }
     }
 

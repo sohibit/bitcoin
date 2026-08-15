@@ -914,6 +914,10 @@ static std::string RecurseImportData(const CScript& script, ImportData& import_d
         return "unrecognized script";
     case TxoutType::TX_BARE_DEFAULT_CHECK_TEMPLATE_VERIFY_HASH:
         return "bare default CheckTemplateVerify hash";
+    case TxoutType::DRIVECHAIN:
+        return "sidechain treasury";
+    case TxoutType::WITHDRAWAL_REQUEST:
+        return "sidechain withdrawal request";
     } // no default case, so the compiler can warn about missing cases
     NONFATAL_UNREACHABLE();
 }

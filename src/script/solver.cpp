@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <sidechain/script.h>
+
 #include <string>
 
 typedef std::vector<unsigned char> valtype;
@@ -29,6 +31,8 @@ std::string GetTxnOutputType(TxoutType t)
     case TxoutType::WITNESS_V0_SCRIPTHASH: return "witness_v0_scripthash";
     case TxoutType::WITNESS_V1_TAPROOT: return "witness_v1_taproot";
     case TxoutType::TX_BARE_DEFAULT_CHECK_TEMPLATE_VERIFY_HASH: return "bare_default_ctv_hash";
+    case TxoutType::DRIVECHAIN: return "drivechain";
+    case TxoutType::WITHDRAWAL_REQUEST: return "withdrawalrequest";
     case TxoutType::WITNESS_UNKNOWN: return "witness_unknown";
     } // no default case, so the compiler can warn about missing cases
     assert(false);
@@ -154,6 +158,16 @@ TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned c
 
     if (scriptPubKey.IsPayToBareDefaultCheckTemplateVerifyHash()) {
         return TxoutType::TX_BARE_DEFAULT_CHECK_TEMPLATE_VERIFY_HASH;
+    }
+
+    uint8_t sidechain_slot;
+    if (sidechain::IsDrivechainTreasury(scriptPubKey, sidechain_slot)) {
+        vSolutionsRet.push_back({sidechain_slot});
+        return TxoutType::DRIVECHAIN;
+    }
+
+    if (sidechain::IsWithdrawalRequestScript(scriptPubKey)) {
+        return TxoutType::WITHDRAWAL_REQUEST;
     }
 
     int witnessversion;
