@@ -2474,6 +2474,14 @@ BOOST_FIXTURE_TEST_CASE(miner_and_validator_agree_on_range, PegFixture)
  * chain, not from memory, so that state does not clear on restart. The producer
  * ends the range earlier and takes the rest next block.
  */
+//! Deposits that fill one mainchain block. A deposit costs about 136 weight in
+//! the coinbase, and the budget is half a block. One block of these fits, and
+//! two do not.
+constexpr size_t DEPOSITS_PER_MAIN_BLOCK{MAX_BLOCK_WEIGHT / 500};
+
+//! Deposits that no coinbase can hold, whatever the block weight is.
+constexpr size_t DEPOSITS_PAST_ANY_BLOCK{MAX_BLOCK_WEIGHT / 200};
+
 BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
 {
     const std::string addr{SampleAddress()};
@@ -2491,7 +2499,7 @@ BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
     uint64_t sequence{0};
     for (const int32_t height : {13, 14, 15}) {
         std::vector<Deposit> deposits;
-        for (int i{0}; i < 8000; ++i) deposits.push_back(MakeDeposit(++sequence, 1000, addr));
+        for (size_t i{0}; i < DEPOSITS_PER_MAIN_BLOCK; ++i) deposits.push_back(MakeDeposit(++sequence, 1000, addr));
         source.deposits_by_height[height] = std::move(deposits);
     }
 
@@ -2506,7 +2514,7 @@ BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
     size_t weight{0};
     for (const CTxOut& out : peg.deposits) weight += WITNESS_SCALE_FACTOR * GetSerializeSize(out);
     BOOST_CHECK(weight <= MAX_BLOCK_WEIGHT / 2);
-    BOOST_CHECK_EQUAL(peg.deposits.size(), 8000U);
+    BOOST_CHECK_EQUAL(peg.deposits.size(), DEPOSITS_PER_MAIN_BLOCK);
 
     // The first sidechain block has no parent anchor, so its range starts at
     // the lowest block the cache reaches. That is the largest backlog there is,
@@ -2515,7 +2523,7 @@ BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
     BOOST_REQUIRE_MESSAGE(
         BuildCoinbasePegOutputs(&grandparent, read, source.synced_tip, ComputeDepositBudget(MAX_BLOCK_WEIGHT, 8'000), first_block, error), error);
     BOOST_CHECK(first_block.prev_main == first);
-    BOOST_CHECK_EQUAL(first_block.deposits.size(), 8000U);
+    BOOST_CHECK_EQUAL(first_block.deposits.size(), DEPOSITS_PER_MAIN_BLOCK);
 
     // A budget too small for the next mainchain block leaves the range nowhere
     // to go. The producer says so and makes no block. A wait would never end:
@@ -2533,7 +2541,7 @@ BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
     CoinbasePeg later;
     BOOST_REQUIRE_MESSAGE(BuildCoinbasePegOutputs(&parent, read, source.synced_tip, ComputeDepositBudget(MAX_BLOCK_WEIGHT, 8'000), later, error), error);
     BOOST_CHECK(later.prev_main == second);
-    BOOST_CHECK_EQUAL(later.deposits.size(), 8000U);
+    BOOST_CHECK_EQUAL(later.deposits.size(), DEPOSITS_PER_MAIN_BLOCK);
 }
 
 /**
@@ -2552,7 +2560,7 @@ BOOST_FIXTURE_TEST_CASE(deposits_that_fit_no_block_are_reported, PegFixture)
     source.synced_tip = prev_main;
 
     std::vector<Deposit> huge;
-    for (int i{0}; i < 20'000; ++i) huge.push_back(MakeDeposit(i + 1, 1000, addr));
+    for (size_t i{0}; i < DEPOSITS_PAST_ANY_BLOCK; ++i) huge.push_back(MakeDeposit(i + 1, 1000, addr));
     source.deposits_by_height[13] = std::move(huge);
 
     const auto read{[this](CBlock& out, const CBlockIndex& at) { return ReadParent(out, at); }};

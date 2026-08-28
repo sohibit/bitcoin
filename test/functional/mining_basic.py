@@ -238,7 +238,8 @@ class MiningTest(BitcoinTestFramework):
     def test_block_max_weight(self):
         self.log.info("Testing default and custom -blockmaxweight startup options.")
 
-        LARGE_TXS_COUNT = 10
+        # Each large transaction has to stay under the standard weight limit.
+        LARGE_TXS_COUNT = 100
         LARGE_VSIZE = int(((MAX_BLOCK_WEIGHT - DEFAULT_BLOCK_RESERVED_WEIGHT) / WITNESS_SCALE_FACTOR) / LARGE_TXS_COUNT)
         HIGH_FEERATE = Decimal("0.0003")
 
@@ -258,8 +259,8 @@ class MiningTest(BitcoinTestFramework):
         self.log.info(f"Testing that the mempool contains {LARGE_TXS_COUNT + 2} transactions.")
         assert_equal(len(self.nodes[0].getrawmempool()), LARGE_TXS_COUNT + 2)
 
-        # Verify the block template includes only the 10 high-fee transactions
-        self.log.info("Testing that the block template includes only the 10 large transactions.")
+        # Verify the block template includes only the large high-fee transactions
+        self.log.info(f"Testing that the block template includes only the {LARGE_TXS_COUNT} large transactions.")
         self.verify_block_template(
             expected_tx_count=LARGE_TXS_COUNT,
             expected_weight=MAX_BLOCK_WEIGHT - DEFAULT_BLOCK_RESERVED_WEIGHT,
@@ -270,9 +271,9 @@ class MiningTest(BitcoinTestFramework):
         # Reducing the weight by 2000 units will prevent 1 large transaction from fitting into the block.
         self.restart_node(0, extra_args=[f"-blockmaxweight={custom_block_weight}"])
 
-        self.log.info("Testing the block template with custom -blockmaxweight to include 9 large and 2 normal transactions.")
+        self.log.info(f"Testing the block template with custom -blockmaxweight to include {LARGE_TXS_COUNT - 1} large and 2 normal transactions.")
         self.verify_block_template(
-            expected_tx_count=11,
+            expected_tx_count=LARGE_TXS_COUNT + 1,
             expected_weight=MAX_BLOCK_WEIGHT - DEFAULT_BLOCK_RESERVED_WEIGHT - 2000,
         )
 
@@ -284,7 +285,7 @@ class MiningTest(BitcoinTestFramework):
         self.log.info(f"Testing that the mempool's weight matches the maximum block weight: {MAX_BLOCK_WEIGHT}.")
         assert_equal(self.nodes[0].getmempoolinfo()['bytes'] * WITNESS_SCALE_FACTOR, MAX_BLOCK_WEIGHT)
 
-        self.log.info("Testing that the block template includes only 10 transactions and cannot reach full block weight.")
+        self.log.info(f"Testing that the block template includes only {LARGE_TXS_COUNT} transactions and cannot reach full block weight.")
         self.verify_block_template(
             expected_tx_count=LARGE_TXS_COUNT,
             expected_weight=MAX_BLOCK_WEIGHT - DEFAULT_BLOCK_RESERVED_WEIGHT,
@@ -294,7 +295,7 @@ class MiningTest(BitcoinTestFramework):
         # Lowering the -blockreservedweight by 4000 will allow for two more transactions.
         self.restart_node(0, extra_args=["-blockreservedweight=4000"])
         self.verify_block_template(
-            expected_tx_count=12,
+            expected_tx_count=LARGE_TXS_COUNT + 2,
             expected_weight=MAX_BLOCK_WEIGHT - 4000,
         )
 

@@ -32,7 +32,8 @@ from test_framework.crypto.siphash import siphash256
 from test_framework.util import assert_equal
 
 MAX_LOCATOR_SZ = 101
-MAX_BLOCK_WEIGHT = 4000000
+MAX_BLOCK_WEIGHT = 30000000
+MAX_BLOCK_SERIALIZED_SIZE = 30000000
 DEFAULT_BLOCK_RESERVED_WEIGHT = 8000
 MINIMUM_BLOCK_RESERVED_WEIGHT = 2000
 MAX_BLOOM_FILTER_SIZE = 36000
@@ -45,7 +46,7 @@ MAX_BIP125_RBF_SEQUENCE = 0xfffffffd  # Sequence number that is rbf-opt-in (BIP 
 MAX_SEQUENCE_NONFINAL = 0xfffffffe  # Sequence number that is csv-opt-out (BIP 68)
 SEQUENCE_FINAL = 0xffffffff  # Sequence number that disables nLockTime if set for every input of a tx
 
-MAX_PROTOCOL_MESSAGE_LENGTH = 4000000  # Maximum length of incoming protocol messages
+MAX_PROTOCOL_MESSAGE_LENGTH = 32000000  # Maximum length of incoming protocol messages
 MAX_HEADERS_RESULTS = 2000  # Number of headers sent in one getheaders result
 MAX_INV_SIZE = 50000  # Maximum number of entries in an 'inv' protocol message
 

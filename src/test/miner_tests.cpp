@@ -254,6 +254,12 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
     entry.nFee = 11;
     entry.nHeight = 11;
 
+    // One CHECKMULTISIG behind OP_NOP costs 20 signature operations. This count
+    // of them makes 1001 transactions pass the block limit.
+    constexpr int64_t MULTISIG_SIGOPS_COST{20 * WITNESS_SCALE_FACTOR};
+    constexpr unsigned int MULTISIGS_PER_TX{
+        static_cast<unsigned int>(MAX_BLOCK_SIGOPS_COST / (1000 * MULTISIG_SIGOPS_COST)) + 1};
+
     const CAmount BLOCKSUBSIDY = 50 * COIN;
     const CAmount LOWFEE = CENT;
     const CAmount HIGHFEE = COIN;
@@ -274,10 +280,14 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
         BOOST_REQUIRE(block_template);
         CBlock block{block_template->getBlock()};
 
-        // block sigops > limit: 1000 CHECKMULTISIG + 1
+        // block sigops > limit: 1001 transactions that together pass it
         tx.vin.resize(1);
         // NOTE: OP_NOP is used to force 20 SigOps for the CHECKMULTISIG
-        tx.vin[0].scriptSig = CScript() << OP_0 << OP_0 << OP_0 << OP_NOP << OP_CHECKMULTISIG << OP_1;
+        CScript sigops_script;
+        for (unsigned int i = 0; i < MULTISIGS_PER_TX; ++i) {
+            sigops_script << OP_0 << OP_0 << OP_0 << OP_NOP << OP_CHECKMULTISIG;
+        }
+        tx.vin[0].scriptSig = sigops_script << OP_1;
         tx.vin[0].prevout.hash = txFirst[0]->GetHash();
         tx.vin[0].prevout.n = 0;
         tx.vout.resize(1);
@@ -305,7 +315,7 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
             hash = tx.GetHash();
             bool spendsCoinbase = i == 0; // only first tx spends coinbase
             // If we do set the # of sig ops in the CTxMemPoolEntry, template creation passes
-            AddToMempool(tx_mempool, entry.Fee(LOWFEE).Time(Now<NodeSeconds>()).SpendsCoinbase(spendsCoinbase).SigOpsCost(80).FromTx(tx));
+            AddToMempool(tx_mempool, entry.Fee(LOWFEE).Time(Now<NodeSeconds>()).SpendsCoinbase(spendsCoinbase).SigOpsCost(MULTISIGS_PER_TX * MULTISIG_SIGOPS_COST).FromTx(tx));
             tx.vin[0].prevout.hash = hash;
         }
         BOOST_REQUIRE(mining->createNewBlock(options));
