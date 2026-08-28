@@ -43,11 +43,26 @@ std::string DepositAddressChecksum(uint8_t slot, const std::string& address);
 //! Full deposit address string as presented to a depositor.
 std::string EncodeDepositAddress(uint8_t slot, const std::string& address);
 
+//! One part in 400 of a deposit, which is 0.25%.
+static constexpr CAmount DEPOSIT_FEE_DIVISOR{400};
+
+//! The most one deposit pays, whatever its size.
+static constexpr CAmount MAX_DEPOSIT_FEE{1'000'000'000};
+
+//! What one deposit pays the development fund. Never more than the deposit.
+CAmount DepositFee(CAmount value);
+
+//! The script the deposit fees pay. One output per block carries their total.
+CScript DepositFeeScript();
+
 /**
  * Verify the coinbase credits exactly the deposits reported for this block.
  *
- * Deposits occupy the leading outputs in sequence-number order. `credited`
- * returns their total, which the caller adds to the block reward ceiling.
+ * Deposits occupy the leading outputs in sequence-number order, each paying its
+ * value less DepositFee(). The output after them pays those fees to
+ * DepositFeeScript(), and it is absent only when the block credits nothing.
+ * `credited` returns the deposit total, which the caller adds to the block
+ * reward ceiling.
  *
  * The fee ceiling is deliberately not checked here: ConnectBlock already
  * enforces GetValueOut() <= nFees + subsidy + credited, with the real fee total.

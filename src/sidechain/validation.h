@@ -281,6 +281,7 @@ bool BuildPegTransactions(ChainstateManager& chainman,
 
 //! Everything the coinbase owes the peg, and the mainchain range it covers.
 struct CoinbasePeg {
+    //! The outputs a coinbase leads with: one per deposit, then the fee they pay.
     std::vector<CTxOut> deposits;
     CTxOut bmm_commitment;
     //! The mainchain block this sidechain block anchors to.

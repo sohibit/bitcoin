@@ -776,7 +776,7 @@ BOOST_AUTO_TEST_CASE(coinbase_credits_deposits_in_order)
 
     std::string reason;
     CAmount credited{0};
-    const auto cb{CoinbaseWith({CTxOut{1000, spk}, CTxOut{2000, spk}})};
+    const auto cb{CoinbaseWith({CTxOut{998, spk}, CTxOut{1995, spk}, CTxOut{7, DepositFeeScript()}})};
     BOOST_CHECK(CheckCoinbaseDeposits(CTransaction{cb}, deposits, credited, reason));
     BOOST_CHECK(reason.empty());
 }
@@ -810,12 +810,64 @@ BOOST_AUTO_TEST_CASE(undecodable_deposit_credits_unspendable)
     std::string reason;
     CAmount credited{0};
 
-    const auto burned{CoinbaseWith({CTxOut{1000, CScript() << OP_RETURN}})};
+    const auto burned{CoinbaseWith({CTxOut{998, CScript() << OP_RETURN}, CTxOut{2, DepositFeeScript()}})};
     BOOST_CHECK(CheckCoinbaseDeposits(CTransaction{burned}, deposits, credited, reason));
 
-    const auto stolen{CoinbaseWith({CTxOut{1000, CScript() << OP_TRUE}})};
+    const auto stolen{CoinbaseWith({CTxOut{998, CScript() << OP_TRUE}, CTxOut{2, DepositFeeScript()}})};
     BOOST_CHECK(!CheckCoinbaseDeposits(CTransaction{stolen}, deposits, credited, reason));
     BOOST_CHECK_EQUAL(reason, "bad-cb-deposit-script");
+}
+
+//! One part in 400, and never more than the cap.
+BOOST_AUTO_TEST_CASE(deposit_fee_takes_a_quarter_percent_up_to_the_cap)
+{
+    BOOST_CHECK_EQUAL(DepositFee(0), 0);
+    BOOST_CHECK_EQUAL(DepositFee(399), 0);
+    BOOST_CHECK_EQUAL(DepositFee(400), 1);
+    BOOST_CHECK_EQUAL(DepositFee(100'000'000), 250'000);
+    BOOST_CHECK_EQUAL(DepositFee(MAX_DEPOSIT_FEE * DEPOSIT_FEE_DIVISOR), MAX_DEPOSIT_FEE);
+    BOOST_CHECK_EQUAL(DepositFee(MAX_MONEY), MAX_DEPOSIT_FEE);
+}
+
+//! A flat rate is linear, so a split pays the same. Only the cap is not linear,
+//! and a split moves away from it. Without this nobody would pay the fee.
+BOOST_AUTO_TEST_CASE(splitting_a_deposit_does_not_lower_the_fee)
+{
+    const CAmount whole{4'000'000};
+    CAmount split{0};
+    for (int i{0}; i < 10; ++i) split += DepositFee(whole / 10);
+    BOOST_CHECK_EQUAL(split, DepositFee(whole));
+}
+
+//! The value equation alone allows a coinbase that pays the depositor short and
+//! keeps the difference, so the fee output is checked on its own.
+BOOST_AUTO_TEST_CASE(coinbase_rejects_a_fee_the_miner_keeps)
+{
+    const std::string addr{SampleAddress()};
+    const CScript spk{*DecodeDepositPayload(Bytes(addr))};
+    const std::vector<Deposit> deposits{MakeDeposit(1, 400'000, addr)};
+    std::string reason;
+    CAmount credited{0};
+
+    const auto dropped{CoinbaseWith({CTxOut{399'000, spk}})};
+    BOOST_CHECK(!CheckCoinbaseDeposits(CTransaction{dropped}, deposits, credited, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-cb-missing-fee");
+
+    const auto elsewhere{CoinbaseWith({CTxOut{399'000, spk}, CTxOut{1'000, spk}})};
+    BOOST_CHECK(!CheckCoinbaseDeposits(CTransaction{elsewhere}, deposits, credited, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-cb-fee-script");
+
+    const auto shorted{CoinbaseWith({CTxOut{399'000, spk}, CTxOut{999, DepositFeeScript()}})};
+    BOOST_CHECK(!CheckCoinbaseDeposits(CTransaction{shorted}, deposits, credited, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-cb-fee-amount");
+
+    const auto overcharged{CoinbaseWith({CTxOut{398'000, spk}, CTxOut{2'000, DepositFeeScript()}})};
+    BOOST_CHECK(!CheckCoinbaseDeposits(CTransaction{overcharged}, deposits, credited, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-cb-deposit-amount");
+
+    const auto paid{CoinbaseWith({CTxOut{399'000, spk}, CTxOut{1'000, DepositFeeScript()}})};
+    BOOST_CHECK(CheckCoinbaseDeposits(CTransaction{paid}, deposits, credited, reason));
+    BOOST_CHECK_EQUAL(credited, 400'000);
 }
 
 //! The payload is an arbitrary-length string lifted from a mainchain OP_RETURN
@@ -2046,11 +2098,13 @@ BOOST_FIXTURE_TEST_CASE(peg_rules_reports_deposit_credit, PegFixture)
     const CScript spk{*DecodeDepositPayload(Bytes(addr))};
     source.range_deposits = {MakeDeposit(1, 1000, addr), MakeDeposit(2, 2000, addr)};
 
-    CBlock block{BlockWith({CTxOut{1000, spk}, CTxOut{2000, spk}}, true, prev_main)};
+    CBlock block{BlockWith({CTxOut{998, spk}, CTxOut{1995, spk}, CTxOut{7, DepositFeeScript()}},
+                           true, prev_main)};
     CAmount credit{0};
     BlockValidationState state;
     const auto read{[this](CBlock& out, const CBlockIndex& at) { return ReadParent(out, at); }};
     BOOST_CHECK(CheckBlockPegRulesImpl(block, index, read, NoSpends, false, credit, state));
+    // The whole deposit reaches the reward ceiling. The fee only moves who owns it.
     BOOST_CHECK_EQUAL(credit, 3000);
 }
 
@@ -2514,7 +2568,7 @@ BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
     size_t weight{0};
     for (const CTxOut& out : peg.deposits) weight += WITNESS_SCALE_FACTOR * GetSerializeSize(out);
     BOOST_CHECK(weight <= MAX_BLOCK_WEIGHT / 2);
-    BOOST_CHECK_EQUAL(peg.deposits.size(), DEPOSITS_PER_MAIN_BLOCK);
+    BOOST_CHECK_EQUAL(peg.deposits.size(), DEPOSITS_PER_MAIN_BLOCK + 1);  // the deposits, then their fee
 
     // The first sidechain block has no parent anchor, so its range starts at
     // the lowest block the cache reaches. That is the largest backlog there is,
@@ -2523,7 +2577,7 @@ BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
     BOOST_REQUIRE_MESSAGE(
         BuildCoinbasePegOutputs(&grandparent, read, source.synced_tip, ComputeDepositBudget(MAX_BLOCK_WEIGHT, 8'000), first_block, error), error);
     BOOST_CHECK(first_block.prev_main == first);
-    BOOST_CHECK_EQUAL(first_block.deposits.size(), DEPOSITS_PER_MAIN_BLOCK);
+    BOOST_CHECK_EQUAL(first_block.deposits.size(), DEPOSITS_PER_MAIN_BLOCK + 1);
 
     // A budget too small for the next mainchain block leaves the range nowhere
     // to go. The producer says so and makes no block. A wait would never end:
@@ -2541,7 +2595,7 @@ BOOST_FIXTURE_TEST_CASE(deposit_backlog_drains_over_blocks, PegFixture)
     CoinbasePeg later;
     BOOST_REQUIRE_MESSAGE(BuildCoinbasePegOutputs(&parent, read, source.synced_tip, ComputeDepositBudget(MAX_BLOCK_WEIGHT, 8'000), later, error), error);
     BOOST_CHECK(later.prev_main == second);
-    BOOST_CHECK_EQUAL(later.deposits.size(), DEPOSITS_PER_MAIN_BLOCK);
+    BOOST_CHECK_EQUAL(later.deposits.size(), DEPOSITS_PER_MAIN_BLOCK + 1);
 }
 
 /**
