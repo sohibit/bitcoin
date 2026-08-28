@@ -28,8 +28,12 @@ class ReplaceByFeeTest(BitcoinTestFramework):
 
     def set_test_params(self):
         self.num_nodes = 2
+        # test_incremental_relay_feerates restarts without these, which is the only
+        # way the node raises the minimum relay feerate on its own.
+        self.pin_relay_fee = False
         self.extra_args = [
             [
+                "-minrelaytxfee=0.00000100",
                 "-limitancestorcount=50",
                 "-limitancestorsize=101",
                 "-limitdescendantcount=200",
@@ -37,6 +41,7 @@ class ReplaceByFeeTest(BitcoinTestFramework):
             ],
             # second node has default mempool parameters
             [
+                "-minrelaytxfee=0.00000100",
             ],
         ]
         self.supports_cli = False

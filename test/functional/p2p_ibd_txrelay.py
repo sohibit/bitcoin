@@ -28,7 +28,7 @@ from test_framework.p2p import (
 )
 from test_framework.test_framework import BitcoinTestFramework
 
-MAX_FEE_FILTER = Decimal(9936506) / COIN
+MAX_FEE_FILTER = Decimal(9979381) / COIN
 NORMAL_FEE_FILTER = Decimal(10) / COIN
 
 

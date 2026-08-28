@@ -168,6 +168,7 @@ BASE_SCRIPTS = [
     'wallet_signer.py --descriptors',
     'wallet_importmulti.py --legacy-wallet',
     'mempool_limit.py',
+    'mempool_minrelayfee.py',
     'rpc_txoutproof.py',
     'rpc_orphans.py',
     'wallet_listreceivedby.py --legacy-wallet',

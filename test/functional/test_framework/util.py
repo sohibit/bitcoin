@@ -412,17 +412,17 @@ def rpc_url(datadir, i, chain, rpchost):
 ################
 
 
-def initialize_datadir(dirname, n, chain, disable_autoconnect=True):
+def initialize_datadir(dirname, n, chain, disable_autoconnect=True, pin_relay_fee=True):
     datadir = get_datadir_path(dirname, n)
     if not os.path.isdir(datadir):
         os.makedirs(datadir)
-    write_config(os.path.join(datadir, "bitcoin.conf"), n=n, chain=chain, disable_autoconnect=disable_autoconnect)
+    write_config(os.path.join(datadir, "bitcoin.conf"), n=n, chain=chain, disable_autoconnect=disable_autoconnect, pin_relay_fee=pin_relay_fee)
     os.makedirs(os.path.join(datadir, 'stderr'), exist_ok=True)
     os.makedirs(os.path.join(datadir, 'stdout'), exist_ok=True)
     return datadir
 
 
-def write_config(config_path, *, n, chain, extra_config="", disable_autoconnect=True):
+def write_config(config_path, *, n, chain, extra_config="", disable_autoconnect=True, pin_relay_fee=True):
     # Translate chain subdirectory name to config name
     if chain == 'testnet3':
         chain_name_conf_arg = 'testnet'
@@ -441,6 +441,11 @@ def write_config(config_path, *, n, chain, extra_config="", disable_autoconnect=
         f.write("rpcservertimeout=99000\n")
         f.write("rpcdoccheck=1\n")
         f.write("fallbackfee=0.0002\n")
+        # The suite builds transactions at the upstream fee floor, so pin it here
+        # instead of in every test that pays less than the node default.
+        if pin_relay_fee:
+            f.write("minrelaytxfee=0.00000100\n")
+            f.write("mintxfee=0.00001000\n")
         f.write("server=1\n")
         f.write("keypool=1\n")
         f.write("discover=0\n")
