@@ -562,12 +562,16 @@ bool BuildDepositOutputs(PegDataSource& cache,
         return false;
     }
     out.clear();
+    CAmount fee_total{0};
     for (const Deposit& d : SortDeposits(deposits)) {
         const std::optional<CScript> script{DecodeDepositPayload(d.address)};
+        const CAmount fee{DepositFee(d.value)};
+        fee_total += fee;
         // An undecodable payload still carries real mainchain value, so it is
         // credited to an unspendable output rather than dropped.
-        out.emplace_back(d.value, script ? *script : UndecodableDepositScript());
+        out.emplace_back(d.value - fee, script ? *script : UndecodableDepositScript());
     }
+    if (fee_total > 0) out.emplace_back(fee_total, DepositFeeScript());
     return true;
 }
 

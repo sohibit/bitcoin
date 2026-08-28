@@ -52,6 +52,9 @@ BUNDLE_PUBLISH_DEPTH = 6
 ABORT_TEST_COUNT = 70
 
 SLOT = 119
+
+#: The 2-of-3 script the deposit fee pays.
+DEPOSIT_FEE_SCRIPT = "00207fc7412726e29c8bcaff492fe4beb53a7085b9fa5cdaf0ad5e2717b544b9057f"
 ENFORCER_PORT = 51151
 ZMQ_PORT = 29332
 
@@ -1028,11 +1031,20 @@ class SidechainBmmTest(BitcoinTestFramework):
             assert_equal(node.getblockcount(), 4)
 
             coinbase = node.getblock(node.getblockhash(4), 2)["tx"][0]
+            fee_sats = deposit_sats // 400
             paid = [out for out in coinbase["vout"] if out["scriptPubKey"]["hex"] == credited]
             assert_equal(len(paid), 1)
-            assert_equal(paid[0]["value"], Decimal(deposit_sats) / COIN)
+            assert_equal(paid[0]["value"], Decimal(deposit_sats - fee_sats) / COIN)
+
+            # The development fund takes the rest, in one output of its own.
+            fund = [out for out in coinbase["vout"]
+                    if out["scriptPubKey"]["hex"] == DEPOSIT_FEE_SCRIPT]
+            assert_equal(len(fund), 1)
+            assert_equal(fund[0]["value"], Decimal(fee_sats) / COIN)
+
             # The deposit is the only thing minted: it lands in the coinbase and
-            # nothing else on this chain creates value.
+            # nothing else on this chain creates value. The fee moves who owns
+            # part of it, and nothing else.
             assert_equal(
                 sum(out["value"] for out in coinbase["vout"]),
                 Decimal(deposit_sats) / COIN,
@@ -1256,7 +1268,7 @@ class SidechainBmmTest(BitcoinTestFramework):
             gap_paid = [out for out in gap_coinbase["vout"]
                         if out["scriptPubKey"]["hex"] == gap_credited]
             assert_equal(len(gap_paid), 1)
-            assert_equal(gap_paid[0]["value"], Decimal(gap_sats) / COIN)
+            assert_equal(gap_paid[0]["value"], Decimal(gap_sats - gap_sats // 400) / COIN)
 
             # Last: it leaves a deferred block at the next height, which stays a
             # candidate and would beat any block mined after it.

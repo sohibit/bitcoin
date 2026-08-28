@@ -94,6 +94,21 @@ std::optional<CScript> DecodeDepositPayload(const std::vector<unsigned char>& pa
 
 CScript UndecodableDepositScript() { return CScript() << OP_RETURN; }
 
+CAmount DepositFee(CAmount value)
+{
+    if (value <= 0) return 0;
+    return std::min<CAmount>(value / DEPOSIT_FEE_DIVISOR, MAX_DEPOSIT_FEE);
+}
+
+CScript DepositFeeScript()
+{
+    // The development fund: a 2-of-3 P2WSH at
+    // bc1q0lr5zfexu2wghjhlfyh7f0448fcgtw06tnd0pt27yutm239eq4ls8ne40h
+    static const std::vector<unsigned char> hash{
+        ParseHex("7fc7412726e29c8bcaff492fe4beb53a7085b9fa5cdaf0ad5e2717b544b9057f")};
+    return CScript() << OP_0 << hash;
+}
+
 std::vector<Deposit> SortDeposits(std::vector<Deposit> deposits)
 {
     std::sort(deposits.begin(), deposits.end(), [](const Deposit& a, const Deposit& b) {
@@ -117,6 +132,8 @@ bool CheckCoinbaseDeposits(const CTransaction& coinbase,
         return false;
     }
 
+    CAmount fee_total{0};
+    CAmount paid{0};
     for (size_t i = 0; i < sorted.size(); ++i) {
         const std::optional<CScript> script{DecodeDepositPayload(sorted[i].address)};
         if (!script) {
@@ -135,15 +152,43 @@ bool CheckCoinbaseDeposits(const CTransaction& coinbase,
             return false;
         }
 
-        if (coinbase.vout[i].nValue != sorted[i].value) {
-            reason = "bad-cb-deposit-amount";
-            return false;
-        }
         if (!MoneyRange(sorted[i].value) || !MoneyRange(credited + sorted[i].value)) {
             reason = "bad-cb-deposit-amount";
             return false;
         }
+        const CAmount fee{DepositFee(sorted[i].value)};
+        if (coinbase.vout[i].nValue != sorted[i].value - fee) {
+            reason = "bad-cb-deposit-amount";
+            return false;
+        }
         credited += sorted[i].value;
+        fee_total += fee;
+        paid += coinbase.vout[i].nValue;
+    }
+
+    // The fee output follows the deposits. Without this check the value
+    // equation alone would let a miner drop it and take the difference.
+    if (fee_total > 0) {
+        if (coinbase.vout.size() <= sorted.size()) {
+            reason = "bad-cb-missing-fee";
+            return false;
+        }
+        const CTxOut& fee_out{coinbase.vout[sorted.size()]};
+        if (fee_out.scriptPubKey != DepositFeeScript()) {
+            reason = "bad-cb-fee-script";
+            return false;
+        }
+        if (fee_out.nValue != fee_total) {
+            reason = "bad-cb-fee-amount";
+            return false;
+        }
+        paid += fee_out.nValue;
+    }
+
+    // What the block mints for deposits is exactly what these outputs pay.
+    if (paid != credited) {
+        reason = "bad-cb-deposit-total";
+        return false;
     }
     return true;
 }
