@@ -513,10 +513,10 @@ namespace {
  *
  * Half the block. One mainchain block of deposits has to fit, or the range
  * cannot move past it and the peg stops for good. A minimal M5 costs about 109
- * base bytes, so a 4 000 000 weight mainchain block holds about 9 100 of them.
- * Each earns one coinbase output of about 34 bytes, which is 136 weight, so
- * about 1 250 000 weight in all. Half a block clears that, and still leaves the
- * mempool half a block.
+ * base bytes, so a 16 384 000 weight mainchain block holds about 37 500 of
+ * them. Each earns one coinbase output of about 34 bytes, which is 136 weight,
+ * so about 5 110 000 weight in all. Half a block clears that, and still leaves
+ * the mempool half a block.
  */
 constexpr size_t MAX_COINBASE_DEPOSIT_WEIGHT{MAX_BLOCK_WEIGHT / 2};
 
@@ -525,7 +525,7 @@ constexpr size_t MAX_COINBASE_DEPOSIT_WEIGHT{MAX_BLOCK_WEIGHT / 2};
  *
  * An owner script is the owner's to choose, and a block's signature-operation
  * limit does not move with its weight. Sixty-four bare multisig scripts cost
- * four times what a whole block may hold, so the count cap alone is not a
+ * four times what one abort may spend, so the count cap alone is not a
  * bound: the queue takes what fits and the rest waits.
  */
 constexpr int64_t MAX_ABORT_SIGOPS_COST{MAX_BLOCK_SIGOPS_COST / 4};

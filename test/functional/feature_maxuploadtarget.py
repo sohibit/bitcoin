@@ -16,6 +16,7 @@ import time
 
 from test_framework.messages import (
     CInv,
+    MAX_BLOCK_SERIALIZED_SIZE,
     MSG_BLOCK,
     msg_getdata,
     msg_mempool,
@@ -29,7 +30,10 @@ from test_framework.util import (
 from test_framework.wallet import MiniWallet
 
 
-UPLOAD_TARGET_MB = 800
+# The node keeps room for one relay of every block in the cycle, so the target
+# has to stay above that buffer.
+DAILY_BUFFER = 144 * MAX_BLOCK_SERIALIZED_SIZE
+UPLOAD_TARGET_MB = DAILY_BUFFER // (1024 * 1024) + 224
 
 
 class TestP2PConn(P2PInterface):
@@ -108,12 +112,11 @@ class MaxUploadTest(BitcoinTestFramework):
         getdata_request.inv.append(CInv(MSG_BLOCK, big_old_block))
 
         max_bytes_per_day = UPLOAD_TARGET_MB * 1024 *1024
-        daily_buffer = 144 * 4000000
-        max_bytes_available = max_bytes_per_day - daily_buffer
+        max_bytes_available = max_bytes_per_day - DAILY_BUFFER
         success_count = max_bytes_available // old_block_size
 
-        # 576MB will be reserved for relaying new blocks, so expect this to
-        # succeed for ~235 tries.
+        # The daily buffer holds room for new block relay, so only what is left
+        # above it serves old blocks.
         for i in range(success_count):
             p2p_conns[0].send_and_ping(getdata_request)
             assert_equal(p2p_conns[0].block_receive_map[big_old_block], i+1)
@@ -133,9 +136,9 @@ class MaxUploadTest(BitcoinTestFramework):
 
         # Requesting the current block on p2p_conns[1] should succeed indefinitely,
         # even when over the max upload target.
-        # We'll try 800 times
+        # As many tries as the total limit takes.
         getdata_request.inv = [CInv(MSG_BLOCK, big_new_block)]
-        for i in range(800):
+        for i in range(max_bytes_per_day // old_block_size + 1):
             p2p_conns[1].send_and_ping(getdata_request)
             assert_equal(p2p_conns[1].block_receive_map[big_new_block], i+1)
 

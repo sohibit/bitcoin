@@ -173,7 +173,9 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         self.txouts = gen_return_txouts()
         self.relayfee = self.nodes[0].getnetworkinfo()['relayfee']
 
-        utxo_count = 90
+        # Each transaction is about 66 kvB, and each of the three groups has to
+        # pass a quarter of the block.
+        utxo_count = 3 * (MAX_BLOCK_WEIGHT // 4 // 50_000 + 10)
         utxos = self.wallet.send_self_transfer_multi(from_node=self.nodes[0], num_outputs=utxo_count)['new_utxos']
         self.generate(self.wallet, 1)
         assert_equal(len(self.nodes[0].getrawmempool()), 0)

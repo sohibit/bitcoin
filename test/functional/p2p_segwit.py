@@ -7,6 +7,7 @@ from decimal import Decimal
 import random
 
 from test_framework.blocktools import (
+    MAX_BLOCK_SIGOPS_WEIGHT,
     WITNESS_COMMITMENT_HEADER,
     add_witness_commitment,
     create_block,
@@ -90,7 +91,7 @@ from test_framework.wallet import MiniWallet
 from test_framework.wallet_util import generate_keypair
 
 
-MAX_SIGOP_COST = 80000
+MAX_SIGOP_COST = MAX_BLOCK_SIGOPS_WEIGHT
 
 SEGWIT_HEIGHT = 120
 
@@ -839,7 +840,9 @@ class SegWitTest(BitcoinTestFramework):
         add_witness_commitment(block)
         block.solve()
 
-        block.vtx[0].wit.vtxinwit[0].scriptWitness.stack.append(b'a' * 5000000)
+        # Witness data costs one weight unit per byte, so this pads the block
+        # just past the limit.
+        block.vtx[0].wit.vtxinwit[0].scriptWitness.stack.append(b'a' * (MAX_BLOCK_WEIGHT - block.get_weight() + 1000))
         assert block.get_weight() > MAX_BLOCK_WEIGHT
 
         # We can't send over the p2p network, because this is too big to relay
@@ -884,7 +887,10 @@ class SegWitTest(BitcoinTestFramework):
         # This should give us plenty of room to tweak the spending tx's
         # virtual size.
         NUM_DROPS = 200  # 201 max ops per script!
-        NUM_OUTPUTS = 50
+        # Each input carries 2 * NUM_DROPS witness items of 195 bytes, and a
+        # witness byte costs one weight unit. Take one input fewer than the
+        # block holds, so the loop below can pad it to the limit.
+        NUM_OUTPUTS = MAX_BLOCK_WEIGHT // (2 * NUM_DROPS * 196 + 800) - 1
 
         witness_script = CScript([OP_2DROP] * NUM_DROPS + [OP_TRUE])
         script_pubkey = script_to_p2wsh_script(witness_script)
@@ -1883,10 +1889,12 @@ class SegWitTest(BitcoinTestFramework):
         """Test sigop counting is correct inside witnesses."""
 
         # Keep this under MAX_OPS_PER_SCRIPT (201)
-        witness_script = CScript([OP_TRUE, OP_IF, OP_TRUE, OP_ELSE] + [OP_CHECKMULTISIG] * 5 + [OP_CHECKSIG] * 193 + [OP_ENDIF])
+        # The OP_CHECKSIG count leaves the block sigop limit a remainder that the
+        # second script below can hold.
+        witness_script = CScript([OP_TRUE, OP_IF, OP_TRUE, OP_ELSE] + [OP_CHECKMULTISIG] * 5 + [OP_CHECKSIG] * 191 + [OP_ENDIF])
         script_pubkey = script_to_p2wsh_script(witness_script)
 
-        sigops_per_script = 20 * 5 + 193 * 1
+        sigops_per_script = 20 * 5 + 191 * 1
         # We'll produce 2 extra outputs, one with a program that would take us
         # over max sig ops, and one with a program that would exactly reach max
         # sig ops

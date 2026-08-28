@@ -169,7 +169,7 @@ static constexpr uint64_t CMPCTBLOCKS_VERSION{2};
 /** How frequently to update templates for sharing */
 static constexpr std::chrono::microseconds TEMPLATE_UPDATE_INTERVAL{30s};
 /** Template weight limit */
-static constexpr unsigned int MAX_TEMPLATE_WEIGHT{8000000};
+static constexpr unsigned int MAX_TEMPLATE_WEIGHT{32768000};
 static_assert(MAX_TEMPLATE_WEIGHT == 2 * MAX_BLOCK_WEIGHT);
 
 // Internal stuff

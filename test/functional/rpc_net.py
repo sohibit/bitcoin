@@ -13,6 +13,7 @@ import platform
 import time
 
 import test_framework.messages
+from test_framework.messages import MAX_PROTOCOL_MESSAGE_LENGTH
 from test_framework.p2p import (
     P2PInterface,
     P2P_SERVICES,
@@ -429,7 +430,7 @@ class NetTest(BitcoinTestFramework):
         node.sendmsgtopeer(peer_id=0, msg_type="addr", msg="FF")
 
         self.log.debug("Test that oversized messages are allowed, but get us disconnected")
-        zero_byte_string = b'\x00' * 4000001
+        zero_byte_string = b'\x00' * (MAX_PROTOCOL_MESSAGE_LENGTH + 1)
         node.sendmsgtopeer(peer_id=0, msg_type="addr", msg=zero_byte_string.hex())
         self.wait_until(lambda: len(self.nodes[0].getpeerinfo()) == 0, timeout=10)
 
