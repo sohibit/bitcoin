@@ -29,7 +29,7 @@ from decimal import Decimal
 
 from io import BytesIO
 
-from test_framework.blocktools import COINBASE_MATURITY, add_witness_commitment
+from test_framework.blocktools import COINBASE_MATURITY, MAX_BLOCK_SIGOPS_WEIGHT, add_witness_commitment
 from test_framework.script import CScript, OP_CHECKMULTISIG, OP_DROP, OP_RETURN, OP_TRUE
 from test_framework.messages import COIN, CBlock, COutPoint, CTransaction, CTxIn, CTxOut, from_hex
 from test_framework.test_framework import BitcoinTestFramework, SkipTest
@@ -617,20 +617,23 @@ class SidechainBmmTest(BitcoinTestFramework):
         """An owner script is the owner's to choose, so an abort caps its cost.
 
         A request output is standard on a sidechain, so anyone can make one by
-        hand with an owner script that costs 5,120 signature operations. Sixteen
-        of those pass what a whole block may hold, and the producer would then
-        fail its own validation on every template. The abort takes what fits --
-        three at this cost -- and the rest waits for the next block.
+        hand with an owner script that costs 5,120 signature operations. A queue
+        of them passes what a whole block may hold, and the producer would then
+        fail its own validation on every template. The abort takes what fits,
+        and the rest waits for the next block.
         """
         node = self.nodes[1]
         # 64 bytes of bare OP_CHECKMULTISIG: 20 signature operations per byte,
         # which is the most any script can cost.
         expensive = bytes([OP_CHECKMULTISIG]) * 64
-        # Four coins of its own, so each request has a confirmed input.
-        node.sendmany("", {node.getnewaddress(): Decimal("0.004") for _ in range(4)})
+        # One abort may spend a quarter of what a block holds, so make one
+        # request more than that many.
+        count = MAX_BLOCK_SIGOPS_WEIGHT // 4 // (4 * 20 * len(expensive)) + 1
+        # A coin of its own for each, so each request has a confirmed input.
+        node.sendmany("", {node.getnewaddress(): Decimal("0.004") for _ in range(count)})
         self.bmm_one_block(address)
-        funds = [u for u in node.listunspent() if u["amount"] == Decimal("0.004")][:4]
-        assert_equal(len(funds), 4)
+        funds = [u for u in node.listunspent() if u["amount"] == Decimal("0.004")][:count]
+        assert_equal(len(funds), count)
 
         made = []
         for funding in funds:
@@ -654,7 +657,7 @@ class SidechainBmmTest(BitcoinTestFramework):
             node.abort_withdrawal(txid, vout)
         self.bmm_one_block(address)
 
-        # Three fit the cap, so one waits. A cap that took all four would make
+        # What fits goes in, so one waits. A cap that took them all would make
         # a block the node refuses, and the queue would never drain.
         left = [1 for txid, vout in made if node.gettxout(txid, vout) is not None]
         assert_equal(len(left), 1)
