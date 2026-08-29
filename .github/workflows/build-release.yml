@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 env:
-  ARTIFACT_PREFIX: L2-S119-Inquisition
+  ARTIFACT_PREFIX: L2-S1-BBC
 
 jobs:
   resolve:
@@ -182,7 +182,7 @@ jobs:
           done
           # The drivechain launcher looks for a binary named after the
           # sidechain, at the root of the archive.
-          cp "$dir/bitcoind${{ matrix.exe-ext }}" "$dir/inquisition${{ matrix.exe-ext }}"
+          cp "$dir/bitcoind${{ matrix.exe-ext }}" "$dir/bbc${{ matrix.exe-ext }}"
           ( cd "$dir" && 7z a -tzip "../${name}.zip" . )
           echo "ZIP_NAME=${name}.zip" >> "$GITHUB_ENV"
 
